@@ -4,3 +4,4 @@ seaborn
 numpy
 tqdm
 openpyxl
+scipy
