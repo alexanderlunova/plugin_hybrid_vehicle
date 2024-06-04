@@ -21,6 +21,7 @@ class Car:
         self.el_power_ts = np.zeros(int(simulation_years) * 8760 * int(1/delta_t))
         self.ice_power_ts = np.zeros(int(simulation_years) * 8760 * int(1/delta_t))
         self.SOC_ts = np.zeros(int(simulation_years) * 8760 * int(1/delta_t))
+        self.dod_ts = np.zeros(int(simulation_years) * 8760 * int(1/delta_t))
         self.charging_interval = charging_interval
         self.recharge = recharge
         self.charging_limit = charging_limit
@@ -29,13 +30,14 @@ class Car:
         self.discharge_efficiency = el_discharging_efficiency
         self.charging_cycles = 0
 
-    def calc_consumption(self, consumption, distance, delta_t, time):
+    def calc_consumption(self, consumption, distance, delta_t, time, additional_battery_weight):
 
         # Calculate average power out of driving profile
         avg_power = consumption/delta_t / self.discharge_efficiency
         el_power = avg_power
         ice_power = 0
         ice_power_share = 0
+        consumption_per_km = consumption / distance
 
         # logic to determine which motor handles the power
 
@@ -60,12 +62,12 @@ class Car:
         el_consumption = el_power * delta_t
 
         # If  consumption exceeds SOC limit, over-amount will be moved to ice
-        if self.SOC - self.SOC_discharge_limit < el_consumption / self.battery_size:
+        if self.SOC - self.SOC_discharge_limit < el_consumption / self.discharge_efficiency / self.battery_size:
 
-            new_el_consumption = (self.SOC - self.SOC_discharge_limit) * self.battery_size / self.discharge_efficiency
+            new_el_consumption = (self.SOC - self.SOC_discharge_limit) * self.battery_size
             new_el_consumption = max(new_el_consumption,0)
             el_power = new_el_consumption / delta_t * self.discharge_efficiency
-            difference = el_consumption - new_el_consumption
+            difference = max(el_consumption - new_el_consumption,0)
 
             # if soc is not high enough for consumption of timestep, ice_power_share is increased to support el motor
             ice_power_share = ((ice_power+difference/delta_t)/self.max_ice_power)
@@ -73,6 +75,9 @@ class Car:
             # update ice and el consumption with new shares
             ice_consumption = ice_power_share * distance / 100 * self.ice_consumption_per_100km
             el_consumption = new_el_consumption
+
+        # consider additional battery weight
+        #ice_consumption += (additional_battery_weight / 100) * (distance * 0.4 / 100)
 
         # store power values in ts
         self.el_power_ts[time] = el_power
@@ -82,9 +87,14 @@ class Car:
         self.el_consumption_ts[time] = el_consumption
         self.ice_consumption_ts[time] = ice_consumption
 
+
+
         return el_consumption, ice_consumption
 
     def drive(self, delta_t, time):
+
+        # soc at start of simulation step
+        initial_soc = self.SOC
 
         # last consumption entry in consumption ts
         el_consumption = self.el_consumption_ts[time]
@@ -99,7 +109,6 @@ class Car:
         # charging of battery
         # checks if car has to be charged
         if self.recharge and time%96 in self.charging_interval and self.charging_limit-self.SOC > 0:
-
             # checks if battery is going to be fully charged
             if self.charging_limit-self.SOC < self.c_rate * delta_t * self.charging_efficiency:
                 self.charging_consumption_ts[time] = (
@@ -112,9 +121,13 @@ class Car:
                 self.SOC += (self.c_rate*delta_t) * self.charging_efficiency
                 self.SOC = min(self.SOC, self.charging_limit)
 
+
         self.SOC_ts[time] = self.SOC
-        self.battery_size = self.battery_size*0.99999
         self.capacity_ts[time] = self.battery_size
+
+        # calculate DOD for cycle ageing
+        final_soc = self.SOC
+        self.dod_ts[time] = abs(initial_soc - final_soc)
 
         return el_consumption
 
