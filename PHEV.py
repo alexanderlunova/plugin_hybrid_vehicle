@@ -37,7 +37,6 @@ class Car:
         el_power = avg_power
         ice_power = 0
         ice_power_share = 0
-        consumption_per_km = consumption / distance
 
         # logic to determine which motor handles the power
 
@@ -77,7 +76,7 @@ class Car:
             el_consumption = new_el_consumption
 
         # consider additional battery weight
-        #ice_consumption += (additional_battery_weight / 100) * (distance * 0.4 / 100)
+        ice_consumption += ice_power_share * (additional_battery_weight / 100) * (distance * 0.4 / 100)
 
         # store power values in ts
         self.el_power_ts[time] = el_power

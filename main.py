@@ -63,7 +63,7 @@ def experiment_1():
         "ID": "1.0",
         "simulation_years": 15,
         "ice_consumption_per_100km": 10,
-        "battery_size": 20,
+        "battery_size": 12,
         "fuel_tank_size": 50,
         "SOC": 0.2,  # starting SOC
         "el_charging_efficiency": 0.98,
@@ -111,6 +111,7 @@ def experiment_1():
     }
 
     configuration = setup(settings)
+    configuration["car"] = setup_car(settings)
 
     # Calculate calendar ageing capacity fade
     calendar_capacity_fade = calculate_calendar_ageing(settings["simulation_years"])
@@ -121,11 +122,11 @@ def experiment_1():
 
         simulation_results = run_simulation(configuration, year)
 
-        print_stats(simulation_results, configuration)
-        costs = calculate_costs(configuration,
-                                simulation_results["ice_consumption_ts"],
-                                simulation_results["charging_consumption_ts"],
-                                configuration["cost_parameters"])
+        #print_stats(simulation_results, configuration)
+        costs = print_cost_breakdown(configuration,
+                                     simulation_results["ice_consumption_ts"],
+                                     simulation_results["charging_consumption_ts"],
+                                     configuration["cost_parameters"])
 
         if settings["plot"]:
             plot_timeseries(configuration["start_time"], configuration["end_time"],
@@ -184,9 +185,9 @@ def experiment_1():
 def experiment_2():
     settings = {
         "ID": "1.0",
-        "simulation_years": 1,
+        "simulation_years": 12,
         "ice_consumption_per_100km": 10,
-        "battery_size": 40,
+        "battery_size": 20,
         "fuel_tank_size": 50,
         "SOC": 0.9,  # starting SOC
         "el_charging_efficiency": 0.98,
@@ -221,13 +222,13 @@ def experiment_2():
         }
     }
     configuration = setup(settings)
+    configuration["car"] = setup_car(settings)
+
+    configuration = modify_driving_profiles(configuration)
+
     simulation_results = run_simulation(configuration)
 
     print_stats(simulation_results, configuration)
-    costs = calculate_costs(configuration,
-                            simulation_results["ice_consumption_ts"],
-                            simulation_results["charging_consumption_ts"],
-                            configuration["cost_parameters"])
 
     if settings["plot"]:
         plot_timeseries(configuration["start_time"], configuration["end_time"],
@@ -235,11 +236,137 @@ def experiment_2():
 
         plot_soc_frequency(simulation_results["SOC_ts"], simulation_results["distance_ts"], settings)
 
+def experiment_3():
+
+    #battery_capacity = np.array([10,12,14,16,18,20,22,24,26,28,30])
+    battery_capacity = np.array([2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30])
+    #battery_capacity = np.array([4,8,12,14,16,20,24,28])
+    #battery_capacity = np.array([50, 100, 150, 200, 250, 300, 350, 400, 450, 500])
+    cell_capacity = 0.01
+    cell_amount = battery_capacity/cell_capacity
+
+    settings = {
+        "ID": "1.0",
+        "simulation_years": 12,
+        "ice_consumption_per_100km": 10, # liters/100km
+        "battery_size": 12,
+        "fuel_tank_size": 50,
+        "SOC": 0.2,  # starting SOC
+        "el_charging_efficiency": 0.98,
+        "el_discharging_efficiency": 0.9,
+        "charging_limit": 0.8,
+        "charging_interval": [93, 94, 95, 96, 0, 1, 2, 3, 4],
+        "c_rate": 0.5,
+        "SOC_discharge_limit": 0.25,
+        "max_el_power": 100,
+        "max_ice_power": 100,
+        "tank_level": 30,
+        "car_weight": 2000,
+        "battery_weight": 800,
+        "additional_battery_weight": 100,
+        "driving_data":
+            r"C:\Users\alexl\Downloads\emobpy_timeseries_original\emobpy_timeseries_original.csv",
+        "delta_t": 0.25,
+        "end_time": 24 * 365 - 1,
+        "start_time": 24 * 0,
+        "years": 1,
+        "plot": False,
+        "recharge": True,
+        "calc_econ": True,
+        "cost_parameters": {
+            "vehicle_costs": 30000,  # Costs in Euro
+            "build_in_battery_costs": 4000,
+            "battery_cell_price": 2,  # Costs in Euro/Cell
+            "cell_amount": 2000,
+            "fuel_costs": 2,  # Costs in Euro/Liter
+            "electricity_costs": 0.4,  # Costs in Euro/kWh
+            "battery_aging_factor": 1.5,
+            "maintenance_costs": 0.0096  # Maintenance costs in euro/km
+        }
+    }
+
+    cost_results = {}
+
+    for i in range(len(battery_capacity)):
+        experiment_results = {
+            "fuel_consumption": [],
+            "charging_consumption": [],
+        }
+        settings["battery_size"] = battery_capacity[i]
+        settings["cost_parameters"]["cell_amount"] = cell_amount[i]
+
+        configuration = setup(settings)
+        configuration["car"] = setup_car(settings)
+
+        # Calculate calendar ageing capacity fade
+        calendar_capacity_fade = calculate_calendar_ageing(settings["simulation_years"])
+        configuration["calendar_capacity_fade"] = calendar_capacity_fade
+
+        # new ts with 50km avg and 400km max
+        configuration = modify_driving_profiles(configuration)
+
+        t = configuration["simulation_years"]
+        for year in range(1, t + 1):
+
+            simulation_results = run_simulation(configuration, year)
+            experiment_results["fuel_consumption"].append(sum(simulation_results["ice_consumption_ts"]))
+            experiment_results["charging_consumption"].append(sum(simulation_results["charging_consumption_ts"]))
+
+        costs = calculate_final_costs(configuration, experiment_results["fuel_consumption"],
+                                        experiment_results["charging_consumption"], configuration["cost_parameters"])
+
+        cost_results[battery_capacity[i]] = costs
+
+    # Extracting data for plotting
+    capacities = list(cost_results.keys())
+    yearly_annuity = [cost_results[cap]["yearly_annuity"] for cap in capacities]
+    npv_opex = [cost_results[cap]["npv_opex"] for cap in capacities]
+    npv_capex = [cost_results[cap]["npv_capex"] for cap in capacities]
+    npv = [cost_results[cap]["npv"] for cap in capacities]
+    running_costs = [cost_results[cap]["running_costs"] for cap in capacities]
+    maintenance_costs = [cost_results[cap]["maintenance_costs"] for cap in capacities]
+    electricity_costs = [cost_results[cap]["electricity_costs"] for cap in capacities]
+    fuel_costs = [cost_results[cap]["fuel_costs"] for cap in capacities]
+
+    # Creating the 2x2 multiplot
+    fig, axs = plt.subplots(2, 2, figsize=(14, 10))
+
+    # Plotting Yearly Annuity
+    axs[0, 0].plot(capacities, yearly_annuity, marker='o')
+    axs[0, 0].set_title('Yearly Annuity')
+    axs[0, 0].set_xlabel('Capacity')
+    axs[0, 0].set_ylabel('Yearly Annuity')
+
+    # Plotting NPV as stacked bar plot
+    axs[0, 1].bar(capacities, npv_opex, label='NPV Opex', bottom=npv_capex)
+    axs[0, 1].bar(capacities, npv_capex, label='NPV Capex')
+    axs[0, 1].set_title('NPV (Opex + Capex)')
+    axs[0, 1].set_xlabel('Capacity')
+    axs[0, 1].set_ylabel('NPV')
+    axs[0, 1].legend()
+
+    # Plotting Running Costs as stacked bar plot
+    axs[1, 0].bar(capacities, maintenance_costs, label='Maintenance Costs', color='g',
+                  bottom=[i + j for i, j in zip(electricity_costs, fuel_costs)])
+    axs[1, 0].bar(capacities, electricity_costs, label='Electricity Costs', color='b',
+                  bottom=fuel_costs)
+    axs[1, 0].bar(capacities, fuel_costs, label='Fuel Costs', color='r')
+    axs[1, 0].set_title('Running Costs Breakdown')
+    axs[1, 0].set_xlabel('Capacity')
+    axs[1, 0].set_ylabel('Running Costs')
+    axs[1, 0].legend()
+
+    # Adjust layout to prevent overlap
+    fig.tight_layout()
+
+    # Display the plot
+    plt.show()
+
 
 def main():
 
-    experiment_1()
-    experiment_2()
+    #experiment_2()
+    experiment_3()
 
     return 0
 

@@ -25,7 +25,28 @@ def setup(settings):
     ts_distance = df['Distance_km']
     ts_consumption = df['Consumption_kWh']
 
-    print(find_special_days(df['Distance_km']))
+
+
+    # calculate calendar ageing for whole simulation time
+    calendar_capacity_fade = calculate_calendar_ageing(settings["simulation_years"])
+
+    configuration = {
+        "ts_distance": ts_distance,
+        "ts_consumption": ts_consumption,
+        "delta_t": settings["delta_t"],
+        "end_time": settings["end_time"],
+        "start_time": settings["start_time"],
+        "cost_parameters": settings["cost_parameters"],
+        "simulation_years": settings["simulation_years"],
+        "calendar_capacity_fade": calendar_capacity_fade,
+        "battery_size": settings["battery_size"],
+        "additional_battery_weight": settings["additional_battery_weight"]
+    }
+
+    return configuration
+
+
+def setup_car(settings):
 
     car = Car(
         battery_size=settings["battery_size"],
@@ -44,24 +65,8 @@ def setup(settings):
         el_discharging_efficiency=settings["el_discharging_efficiency"]
     )
 
-    # calculate calendar ageing for whole simulation time
-    calendar_capacity_fade = calculate_calendar_ageing(settings["simulation_years"])
+    return car
 
-    configuration = {
-        "ts_distance": ts_distance,
-        "ts_consumption": ts_consumption,
-        "car": car,
-        "delta_t": settings["delta_t"],
-        "end_time": settings["end_time"],
-        "start_time": settings["start_time"],
-        "cost_parameters": settings["cost_parameters"],
-        "simulation_years": settings["simulation_years"],
-        "calendar_capacity_fade": calendar_capacity_fade,
-        "battery_size": settings["battery_size"],
-        "additional_battery_weight": settings["additional_battery_weight"]
-    }
-
-    return configuration
 
 
 def calculate_calendar_ageing(simulation_years):
@@ -100,9 +105,10 @@ def calculate_cycle_ageing(dod_ts):
     return cycle_capacity_fade
 
 
-def calculate_costs(configuration, ice_consumption, charging_consumption, cost_parameters):
-    discount_rate = 0.01
-    years = 1
+def calculate_final_costs(configuration, ice_consumption, charging_consumption, cost_parameters):
+
+    discount_rate = 0.05
+    years = configuration["simulation_years"]
 
     electricity_costs = cost_parameters["electricity_costs"] * sum(charging_consumption)
     fuel_costs = cost_parameters["fuel_costs"] * sum(ice_consumption)
@@ -117,24 +123,79 @@ def calculate_costs(configuration, ice_consumption, charging_consumption, cost_p
             cost_parameters["cell_amount"] * cost_parameters["battery_cell_price"]
     )
 
-    annuity_factor = (1 - (1 + discount_rate) ** -years) / discount_rate
-    present_value_running_costs = running_costs * annuity_factor
-    total_present_value = fixed_costs + present_value_running_costs
+    # Calculate the annuity factor
+    annuity_factor = (pow(1 + discount_rate, years) - 1) / (discount_rate * pow(1 + discount_rate, years))
+
+    # Calculate NPV of OPEX
+    npv_opex = running_costs * annuity_factor / years
+
+    # NPV of CAPEX is typically the fixed costs as they are considered upfront
+    npv_capex = fixed_costs
+
+    # Calculate the total NPV
+    npv = npv_opex + npv_capex
+
+    # Calculate the yearly annuity
+    yearly_annuity = npv * (discount_rate * pow(1 + discount_rate, years)) / (pow(1 + discount_rate, years) - 1)
+
+    return {
+        "npv_opex": npv_opex,
+        "npv_capex": npv_capex,
+        "npv": npv,
+        "yearly_annuity": yearly_annuity,
+        "running_costs": running_costs,
+        "fixed_costs": fixed_costs,
+        "electricity_costs": electricity_costs,
+        "fuel_costs": fuel_costs,
+        "maintenance_costs": maintenance_costs
+    }
+
+
+def print_cost_breakdown(configuration, ice_consumption, charging_consumption, cost_parameters):
+    discount_rate = 0.05
+    years = configuration["simulation_years"]
+
+    electricity_costs = cost_parameters["electricity_costs"] * sum(charging_consumption)
+    fuel_costs = cost_parameters["fuel_costs"] * sum(ice_consumption)
+    maintenance_costs = cost_parameters["maintenance_costs"] * sum(configuration["ts_distance"])
+
+    running_costs = (
+            fuel_costs + electricity_costs + maintenance_costs
+    )
+
+    fixed_costs = (
+            cost_parameters["vehicle_costs"] - cost_parameters["build_in_battery_costs"] +
+            cost_parameters["cell_amount"] * cost_parameters["battery_cell_price"]
+    )
+
+    factors = []
+    for t in range(years):
+        factors.append(pow(1-discount_rate, t -1))
+
+    annuity_factor = np.sum(factors)
+
+    npv_opex = running_costs * annuity_factor
+    npv_capex = fixed_costs
+    npv = npv_opex + npv_capex
+
+    yearly_annuity = npv * (discount_rate * pow(1 + discount_rate, years)) / ((pow(1 + discount_rate, years)) - 1)
 
     print(f"{'Cost_breakdown':<30}{'Euro':>10}")
     print(f"{'-' * 40}")
     print(f"{'Running Costs':<30}{running_costs:>10.2f}")
     print(f"{'Electricity Costs':<30}{cost_parameters["electricity_costs"] * sum(charging_consumption):>10.2f}")
     print(f"{'Fuel Costs':<30}{cost_parameters["fuel_costs"] * sum(ice_consumption):>10.2f}")
-    print(f"{'Present value running costs':<30}{present_value_running_costs:>10.2f}")
-    print(f"{'Total present value':<30}{total_present_value:>10.2f}")
+    print(f"{'NPV OPEX':<30}{npv_opex:>10.2f}")
+    print(f"{'Upfront costs':<30}{npv_capex:>10.2f}")
+    print(f"{'NPV':<30}{npv:>10.2f}")
+    print(f"{'Yearly annuity':<30}{yearly_annuity:>10.2f}")
     print(f"{'-' * 40}")
 
     costs = {
         "running_costs": running_costs,
         "electricity_costs": electricity_costs,
         "fuel_costs": fuel_costs,
-        "maintenance_costs": maintenance_costs
+        "maintenance_costs": maintenance_costs,
     }
 
     return costs
@@ -181,3 +242,46 @@ def print_stats(simulation_results, configuration):
     print(f"{'Total charging consumption':<30}{(sum(simulation_results["charging_consumption_ts"])):>10.2f}")
     print(f"{'-' * 40}")
 
+
+def modify_driving_profiles(configuration):
+
+    num_bins = 365
+    long_days = []
+    short_days = []
+    new_ts_distance = []
+
+    for i in range(num_bins):
+        start = i * 96
+        end = (i + 1) * 96
+        bin_data = sum(configuration["ts_distance"][start:end])
+        if (bin_data > 400):
+            long_days.append([start,end])
+            print(bin_data)
+        elif(bin_data < 42 and bin_data > 38):
+            short_days.append([start,end])
+
+    long_distances = np.tile(np.array(configuration["ts_distance"][long_days[1][0]:long_days[1][1]]), 10)
+    long_consumption = np.tile(np.array(configuration["ts_consumption"][long_days[1][0]:long_days[1][1]]), 10)
+
+    short_distances = np.tile(np.array(configuration["ts_distance"][short_days[1][0]:short_days[1][1]]), 355)
+    short_consumption = np.tile(np.array(configuration["ts_consumption"][short_days[1][0]:short_days[1][1]]), 355)
+
+    distance_values = np.concatenate((long_distances,short_distances))
+    consumption_values = np.concatenate((long_consumption, short_consumption))
+
+    # Combine the lists into a list of tuples
+    combined_lists = list(zip(distance_values, consumption_values))
+
+    # Shuffle the combined list of tuples
+    #np.random.shuffle(combined_lists)
+
+    # Unzip the shuffled list of tuples back into separate lists
+    distance_values, consumption_values = zip(*combined_lists)
+
+    distance_values = list(distance_values)
+    consumption_values = list(consumption_values)
+
+    configuration["ts_distance"] = pd.Series(distance_values, name="ts_distance")
+    configuration["ts_consumption"] = pd.Series(consumption_values, name="ts_consumption")
+
+    return configuration
