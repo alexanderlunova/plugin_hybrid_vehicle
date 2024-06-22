@@ -61,15 +61,17 @@ class Car:
         el_consumption = el_power * delta_t
 
         # If  consumption exceeds SOC limit, over-amount will be moved to ice
-        if self.SOC - self.SOC_discharge_limit < el_consumption / self.discharge_efficiency / self.battery_size:
+        if self.SOC - self.SOC_discharge_limit  + 0.001 < el_consumption / self.discharge_efficiency / self.battery_size:
 
+            # calculate how much distance can be driven electrically
+            el_consumption_per_distance = consumption/distance
+            new_el_consumption_per_distance = max(self.SOC - self.SOC_discharge_limit, 0) * self.battery_size / distance
+            ice_power_share = 1 - min(new_el_consumption_per_distance / el_consumption_per_distance, 1)
+
+            # calculate new electrical consumption
             new_el_consumption = (self.SOC - self.SOC_discharge_limit) * self.battery_size
             new_el_consumption = max(new_el_consumption,0)
             el_power = new_el_consumption / delta_t * self.discharge_efficiency
-            difference = max(el_consumption - new_el_consumption,0)
-
-            # if soc is not high enough for consumption of timestep, ice_power_share is increased to support el motor
-            ice_power_share = ((ice_power+difference/delta_t)/self.max_ice_power)
 
             # update ice and el consumption with new shares
             ice_consumption = ice_power_share * distance / 100 * self.ice_consumption_per_100km

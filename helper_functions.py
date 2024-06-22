@@ -25,8 +25,6 @@ def setup(settings):
     ts_distance = df['Distance_km']
     ts_consumption = df['Consumption_kWh']
 
-
-
     # calculate calendar ageing for whole simulation time
     calendar_capacity_fade = calculate_calendar_ageing(settings["simulation_years"])
 
@@ -47,7 +45,6 @@ def setup(settings):
 
 
 def setup_car(settings):
-
     car = Car(
         battery_size=settings["battery_size"],
         fuel_tank_size=settings["fuel_tank_size"],
@@ -68,9 +65,7 @@ def setup_car(settings):
     return car
 
 
-
 def calculate_calendar_ageing(simulation_years):
-
     soc = 50  # SOC in %
     T = 30  # Temperature in C°
     t = simulation_years * 12
@@ -86,12 +81,11 @@ def calculate_calendar_ageing(simulation_years):
 
 
 def calculate_cycle_ageing(dod_ts):
-
     t = 12
     # cycle lifetime
     doc = 0.8  # cycle depth of used data for fitted curve
     c_rate = 4  # conservative c_rate due to too low c_rates for fitted curve
-    fec = sum(dod_ts)/2
+    fec = sum(dod_ts) / 2
 
     k_crate = 0.0630 * c_rate + 0.0971  # c-rate dependent factor
     k_doc = 4.02 * pow(doc - 0.6, 3) + 1.0923  # dod dependent factor
@@ -106,7 +100,6 @@ def calculate_cycle_ageing(dod_ts):
 
 
 def calculate_final_costs(configuration, ice_consumption, charging_consumption, cost_parameters):
-
     discount_rate = 0.05
     years = configuration["simulation_years"]
 
@@ -119,8 +112,12 @@ def calculate_final_costs(configuration, ice_consumption, charging_consumption, 
     )
 
     fixed_costs = (
-            cost_parameters["vehicle_costs"] - cost_parameters["build_in_battery_costs"] +
-            cost_parameters["cell_amount"] * cost_parameters["battery_cell_price"]
+            cost_parameters["vehicle_costs"] +
+            (
+                    cost_parameters["cell_amount"] -
+                    int(cost_parameters["build_in_battery_capacity"] / cost_parameters["cell_capacity"])
+            )
+            * cost_parameters["battery_cell_price"]
     )
 
     # Calculate the annuity factor
@@ -170,7 +167,7 @@ def print_cost_breakdown(configuration, ice_consumption, charging_consumption, c
 
     factors = []
     for t in range(years):
-        factors.append(pow(1-discount_rate, t -1))
+        factors.append(pow(1 - discount_rate, t - 1))
 
     annuity_factor = np.sum(factors)
 
@@ -243,8 +240,7 @@ def print_stats(simulation_results, configuration):
     print(f"{'-' * 40}")
 
 
-def modify_driving_profiles(configuration):
-
+def modify_driving_profiles_2(configuration):
     num_bins = 365
     long_days = []
     short_days = []
@@ -255,10 +251,10 @@ def modify_driving_profiles(configuration):
         end = (i + 1) * 96
         bin_data = sum(configuration["ts_distance"][start:end])
         if (bin_data > 400):
-            long_days.append([start,end])
+            long_days.append([start, end])
             print(bin_data)
-        elif(bin_data < 42 and bin_data > 38):
-            short_days.append([start,end])
+        elif (bin_data < 42 and bin_data > 38):
+            short_days.append([start, end])
 
     long_distances = np.tile(np.array(configuration["ts_distance"][long_days[1][0]:long_days[1][1]]), 10)
     long_consumption = np.tile(np.array(configuration["ts_consumption"][long_days[1][0]:long_days[1][1]]), 10)
@@ -266,7 +262,71 @@ def modify_driving_profiles(configuration):
     short_distances = np.tile(np.array(configuration["ts_distance"][short_days[1][0]:short_days[1][1]]), 355)
     short_consumption = np.tile(np.array(configuration["ts_consumption"][short_days[1][0]:short_days[1][1]]), 355)
 
-    distance_values = np.concatenate((long_distances,short_distances))
+    distance_values = np.concatenate((long_distances, short_distances))
+    consumption_values = np.concatenate((long_consumption, short_consumption))
+
+    # Combine the lists into a list of tuples
+    combined_lists = list(zip(distance_values, consumption_values))
+
+    # Shuffle the combined list of tuples
+    np.random.shuffle(combined_lists)
+
+    # Unzip the shuffled list of tuples back into separate lists
+    distance_values, consumption_values = zip(*combined_lists)
+
+    distance_values = list(distance_values)
+    consumption_values = list(consumption_values)
+
+    configuration["ts_distance"] = pd.Series(distance_values, name="ts_distance")
+    configuration["ts_consumption"] = pd.Series(consumption_values, name="ts_consumption")
+
+    return configuration
+
+
+def modify_driving_profiles(configuration):
+    num_bins = 365
+    long_days = []
+    short_days = []
+    new_ts_distance = []
+
+    for i in range(num_bins):
+        start = i * 96
+        end = (i + 1) * 96
+        bin_data = sum(configuration["ts_distance"][start:end])
+        if bin_data > 400:
+            long_days.append([start, end])
+            print(bin_data)
+        elif 32 < bin_data < 50:
+            short_days.append([start, end])
+
+    # Check if we have enough long_days and short_days
+    if len(long_days) < 1 or len(short_days) < 1:
+        raise ValueError("Not enough long_days or short_days for the modification process.")
+
+    # Use the first long day
+    long_distances = np.tile(np.array(configuration["ts_distance"][long_days[0][0]:long_days[0][1]]), 10)
+    long_consumption = np.tile(np.array(configuration["ts_consumption"][long_days[0][0]:long_days[0][1]]), 10)
+
+    # Use multiple short days and calculate how many repetitions are needed
+    num_short_days_needed = 365 - len(long_distances) // 96
+    num_short_days_to_use = len(short_days)
+    repetitions_per_short_day = num_short_days_needed // num_short_days_to_use
+    remaining_repetitions = num_short_days_needed % num_short_days_to_use
+
+    short_distances = []
+    short_consumption = []
+
+    for i, day in enumerate(short_days):
+        repetitions = repetitions_per_short_day + (1 if i < remaining_repetitions else 0)
+        short_distances.extend(np.tile(np.array(configuration["ts_distance"][day[0]:day[1]]), repetitions))
+        short_consumption.extend(np.tile(np.array(configuration["ts_consumption"][day[0]:day[1]]), repetitions))
+
+    # Ensure the length is exactly 365 days
+    total_intervals_needed = 365 * 96
+    short_distances = short_distances[:total_intervals_needed - len(long_distances)]
+    short_consumption = short_consumption[:total_intervals_needed - len(long_consumption)]
+
+    distance_values = np.concatenate((long_distances, short_distances))
     consumption_values = np.concatenate((long_consumption, short_consumption))
 
     # Combine the lists into a list of tuples
@@ -285,3 +345,141 @@ def modify_driving_profiles(configuration):
     configuration["ts_consumption"] = pd.Series(consumption_values, name="ts_consumption")
 
     return configuration
+
+
+def modify_driving_profiles_4(configuration):
+    num_bins = 365
+    long_days = []
+    short_days = []
+    zero_days = []
+    new_ts_distance = []
+
+    for i in range(num_bins):
+        start = i * 96
+        end = (i + 1) * 96
+        bin_data = sum(configuration["ts_distance"][start:end])
+        if 410 > bin_data > 399:
+            long_days.append([start, end])
+        elif 30 < bin_data < 43:
+            short_days.append([start, end])
+        elif bin_data == 0:
+            zero_days.append([start, end])
+
+    # Check if we have enough long_days and short_days
+    if len(long_days) < 1 or len(short_days) < 1 or len(zero_days) < (2/7 * 365):
+        raise ValueError("Not enough long_days, short_days, or zero_days for the modification process.")
+
+    # Calculate the number of zero days to add
+    num_zero_days_to_add = int(2/7 * 365)
+    zero_distances = np.tile(np.array(configuration["ts_distance"][zero_days[0][0]:zero_days[0][1]]), num_zero_days_to_add)
+    zero_consumption = np.tile(np.array(configuration["ts_consumption"][zero_days[0][0]:zero_days[0][1]]), num_zero_days_to_add)
+
+    # Use the first long day
+    long_distances = np.tile(np.array(configuration["ts_distance"][long_days[0][0]:long_days[0][1]]), 10)
+    long_consumption = np.tile(np.array(configuration["ts_consumption"][long_days[0][0]:long_days[0][1]]), 10)
+
+    # Use multiple short days and calculate how many repetitions are needed
+    num_short_days_needed = 365 - len(long_distances) // 96 - num_zero_days_to_add
+    num_short_days_to_use = len(short_days)
+    repetitions_per_short_day = num_short_days_needed // num_short_days_to_use
+    remaining_repetitions = num_short_days_needed % num_short_days_to_use
+
+    short_distances = []
+    short_consumption = []
+
+    for i, day in enumerate(short_days):
+        repetitions = repetitions_per_short_day + (1 if i < remaining_repetitions else 0)
+        short_distances.extend(np.tile(np.array(configuration["ts_distance"][day[0]:day[1]]), repetitions))
+        short_consumption.extend(np.tile(np.array(configuration["ts_consumption"][day[0]:day[1]]), repetitions))
+
+    # Ensure the length is exactly 365 days
+    total_intervals_needed = 365 * 96
+    short_distances = short_distances[:total_intervals_needed - len(long_distances) - len(zero_distances)]
+    short_consumption = short_consumption[:total_intervals_needed - len(long_consumption) - len(zero_distances)]
+
+    distance_values = np.concatenate((long_distances, short_distances, zero_distances))
+    consumption_values = np.concatenate((long_consumption, short_consumption, zero_consumption))
+
+    # Combine the lists into a list of tuples
+    combined_lists = list(zip(distance_values, consumption_values))
+
+    # Shuffle the combined list of tuples
+    np.random.shuffle(combined_lists)
+
+    # Unzip the shuffled list of tuples back into separate lists
+    distance_values, consumption_values = zip(*combined_lists)
+
+    distance_values = list(distance_values)
+    consumption_values = list(consumption_values)
+
+    configuration["ts_distance"] = pd.Series(distance_values, name="ts_distance")
+    configuration["ts_consumption"] = pd.Series(consumption_values, name="ts_consumption")
+
+    return configuration
+
+
+
+def modify_driving_profiles_3(configuration):
+    num_bins = 365
+    long_days = []
+    short_days = []
+    new_ts_distance = []
+    multiplicator = 1.39
+
+    for i in range(num_bins):
+        start = i * 96
+        end = (i + 1) * 96
+        bin_data = sum(configuration["ts_distance"][start:end])
+        if bin_data > 410:
+            long_days.append(np.array(range(start, end)))
+        elif bin_data < 400/multiplicator:
+            short_days.append(np.array(range(start, end)))
+
+
+    for i in long_days:
+        configuration["ts_distance"][i] = configuration["ts_distance"][27648:27744]
+        configuration["ts_consumption"][i] = configuration["ts_consumption"][27648:27744]
+
+    for i in short_days:
+        configuration["ts_distance"][i] = configuration["ts_distance"][i] * multiplicator
+        configuration["ts_consumption"][i] = configuration["ts_consumption"][i] * multiplicator
+
+    bin_data = []
+    for i in range(num_bins):
+        start = i * 96
+        end = (i + 1) * 96
+        bin_data.append(sum(configuration["ts_distance"][start:end]))
+
+
+    return configuration
+
+
+import os
+
+
+def create_unique_folder(base_folder="Plots"):
+    # Create the base folder if it does not exist
+    os.makedirs(base_folder, exist_ok=True)
+
+    # Get a list of existing folders in the base folder
+    existing_folders = [d for d in os.listdir(base_folder) if os.path.isdir(os.path.join(base_folder, d))]
+
+    # Filter out folders that have a numeric name
+    numeric_folders = [int(folder) for folder in existing_folders if folder.isdigit()]
+
+    # Find the next available ID
+    next_id = 1
+    if numeric_folders:
+        next_id = max(numeric_folders) + 1
+
+    # Create the new folder with the next available ID
+    new_folder_name = os.path.join(base_folder, str(next_id))
+    os.makedirs(new_folder_name)
+    print(f"Created new folder: {new_folder_name}")
+
+    return new_folder_name
+
+
+
+
+

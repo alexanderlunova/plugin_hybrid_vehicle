@@ -183,11 +183,12 @@ def experiment_1():
 
 
 def experiment_2():
+
     settings = {
         "ID": "1.0",
         "simulation_years": 12,
         "ice_consumption_per_100km": 10,
-        "battery_size": 20,
+        "battery_size": 30,
         "fuel_tank_size": 50,
         "SOC": 0.9,  # starting SOC
         "el_charging_efficiency": 0.98,
@@ -215,7 +216,7 @@ def experiment_2():
             "build_in_battery_costs": 8000,
             "battery_cell_price": 0.5,  # Costs in Euro/Cell
             "cell_amount": 15000,
-            "fuel_costs": 1.6,  # Costs in Euro/Liter
+            "fuel_costs": 1.8,  # Costs in Euro/Liter
             "electricity_costs": 0.4,  # Costs in Euro/kWh
             "battery_aging_factor": 1.5,
             "maintenance_costs": 0.0096  # Maintenance costs in euro/km
@@ -224,40 +225,38 @@ def experiment_2():
     configuration = setup(settings)
     configuration["car"] = setup_car(settings)
 
-    configuration = modify_driving_profiles(configuration)
+    configuration = modify_driving_profiles_4(configuration)
 
     simulation_results = run_simulation(configuration)
 
     print_stats(simulation_results, configuration)
 
     if settings["plot"]:
+        folder_name = create_unique_folder()
         plot_timeseries(configuration["start_time"], configuration["end_time"],
-                        configuration["delta_t"], simulation_results)
+                        configuration["delta_t"], simulation_results, settings["battery_size"], folder_name)
 
-        plot_soc_frequency(simulation_results["SOC_ts"], simulation_results["distance_ts"], settings)
+        plot_soc_frequency(simulation_results["SOC_ts"], simulation_results["distance_ts"], settings,
+                           settings["battery_size"], folder_name)
 
 def experiment_3():
-
-    #battery_capacity = np.array([10,12,14,16,18,20,22,24,26,28,30])
-    battery_capacity = np.array([2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30])
-    #battery_capacity = np.array([4,8,12,14,16,20,24,28])
-    #battery_capacity = np.array([50, 100, 150, 200, 250, 300, 350, 400, 450, 500])
-    cell_capacity = 0.01
-    cell_amount = battery_capacity/cell_capacity
+    enable_pretty_plots()
+    battery_capacity = np.array([2,4])
+    battery_capacity = np.array([2,3,4,5,6,7,8,9,10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20])
 
     settings = {
         "ID": "1.0",
         "simulation_years": 12,
-        "ice_consumption_per_100km": 10, # liters/100km
-        "battery_size": 12,
+        "ice_consumption_per_100km": 7, # liters/100km
+        "battery_size": 20,
         "fuel_tank_size": 50,
-        "SOC": 0.2,  # starting SOC
+        "SOC": 0.9,  # starting SOC
         "el_charging_efficiency": 0.98,
         "el_discharging_efficiency": 0.9,
-        "charging_limit": 0.8,
+        "charging_limit": 0.9,
         "charging_interval": [93, 94, 95, 96, 0, 1, 2, 3, 4],
         "c_rate": 0.5,
-        "SOC_discharge_limit": 0.25,
+        "SOC_discharge_limit": 0.20,
         "max_el_power": 100,
         "max_ice_power": 100,
         "tank_level": 30,
@@ -267,33 +266,37 @@ def experiment_3():
         "driving_data":
             r"C:\Users\alexl\Downloads\emobpy_timeseries_original\emobpy_timeseries_original.csv",
         "delta_t": 0.25,
-        "end_time": 24 * 365 - 1,
+        "end_time": 24 * 365,
         "start_time": 24 * 0,
         "years": 1,
-        "plot": False,
+        "plot": True,
         "recharge": True,
         "calc_econ": True,
         "cost_parameters": {
-            "vehicle_costs": 30000,  # Costs in Euro
-            "build_in_battery_costs": 4000,
-            "battery_cell_price": 2,  # Costs in Euro/Cell
-            "cell_amount": 2000,
-            "fuel_costs": 2,  # Costs in Euro/Liter
+            "vehicle_costs": 35000,  # Costs in Euro
+            "build_in_battery_capacity": 16,
+            "battery_cell_price": 1.5,  # Costs in Euro/Cell
+            "cell_capacity": 0.00936,
+            "cell_amount": 2136,
+            "fuel_costs": 1.8,  # Costs in Euro/Liter
             "electricity_costs": 0.4,  # Costs in Euro/kWh
-            "battery_aging_factor": 1.5,
-            "maintenance_costs": 0.0096  # Maintenance costs in euro/km
+            "maintenance_costs": 0.0096 * 3  # Maintenance costs in euro/km
         }
     }
 
     cost_results = {}
 
+    if settings["plot"]:
+        folder_name = create_unique_folder()
+
     for i in range(len(battery_capacity)):
+        print("Simulation for", battery_capacity[i], "kWh battery size:")
         experiment_results = {
             "fuel_consumption": [],
             "charging_consumption": [],
         }
         settings["battery_size"] = battery_capacity[i]
-        settings["cost_parameters"]["cell_amount"] = cell_amount[i]
+        settings["cost_parameters"]["cell_amount"] = battery_capacity[i] / settings["cost_parameters"]["cell_capacity"]
 
         configuration = setup(settings)
         configuration["car"] = setup_car(settings)
@@ -303,19 +306,36 @@ def experiment_3():
         configuration["calendar_capacity_fade"] = calendar_capacity_fade
 
         # new ts with 50km avg and 400km max
-        configuration = modify_driving_profiles(configuration)
+        configuration =  modify_driving_profiles_4(configuration)
 
         t = configuration["simulation_years"]
+
+        if (settings["plot"]):
+            path = os.path.join(folder_name, f"{battery_capacity[i]}_kWh")
+            os.makedirs(path, exist_ok=True)
+
+        capacity_fade = np.zeros(t)
         for year in range(1, t + 1):
 
             simulation_results = run_simulation(configuration, year)
             experiment_results["fuel_consumption"].append(sum(simulation_results["ice_consumption_ts"]))
             experiment_results["charging_consumption"].append(sum(simulation_results["charging_consumption_ts"]))
+            capacity_fade[year-1] = simulation_results["battery_capacity"][0]
+
+            if(settings["plot"] and (year == t or year == 1)):
+                plot_timeseries(configuration["start_time"], configuration["end_time"],
+                                configuration["delta_t"], simulation_results, settings["battery_size"], path, year)
+                plot_soc_frequency(simulation_results["SOC_ts"], simulation_results["distance_ts"], settings,
+                                   settings["battery_size"], path, year)
 
         costs = calculate_final_costs(configuration, experiment_results["fuel_consumption"],
                                         experiment_results["charging_consumption"], configuration["cost_parameters"])
 
         cost_results[battery_capacity[i]] = costs
+
+        if (settings["plot"]):
+            plot_capacity_fade(configuration["simulation_years"], capacity_fade, settings["battery_size"], path)
+
 
     # Extracting data for plotting
     capacities = list(cost_results.keys())
@@ -328,40 +348,9 @@ def experiment_3():
     electricity_costs = [cost_results[cap]["electricity_costs"] for cap in capacities]
     fuel_costs = [cost_results[cap]["fuel_costs"] for cap in capacities]
 
-    # Creating the 2x2 multiplot
-    fig, axs = plt.subplots(2, 2, figsize=(14, 10))
-
-    # Plotting Yearly Annuity
-    axs[0, 0].plot(capacities, yearly_annuity, marker='o')
-    axs[0, 0].set_title('Yearly Annuity')
-    axs[0, 0].set_xlabel('Capacity')
-    axs[0, 0].set_ylabel('Yearly Annuity')
-
-    # Plotting NPV as stacked bar plot
-    axs[0, 1].bar(capacities, npv_opex, label='NPV Opex', bottom=npv_capex)
-    axs[0, 1].bar(capacities, npv_capex, label='NPV Capex')
-    axs[0, 1].set_title('NPV (Opex + Capex)')
-    axs[0, 1].set_xlabel('Capacity')
-    axs[0, 1].set_ylabel('NPV')
-    axs[0, 1].legend()
-
-    # Plotting Running Costs as stacked bar plot
-    axs[1, 0].bar(capacities, maintenance_costs, label='Maintenance Costs', color='g',
-                  bottom=[i + j for i, j in zip(electricity_costs, fuel_costs)])
-    axs[1, 0].bar(capacities, electricity_costs, label='Electricity Costs', color='b',
-                  bottom=fuel_costs)
-    axs[1, 0].bar(capacities, fuel_costs, label='Fuel Costs', color='r')
-    axs[1, 0].set_title('Running Costs Breakdown')
-    axs[1, 0].set_xlabel('Capacity')
-    axs[1, 0].set_ylabel('Running Costs')
-    axs[1, 0].legend()
-
-    # Adjust layout to prevent overlap
-    fig.tight_layout()
-
-    # Display the plot
-    plt.show()
-
+    if settings["plot"]:
+        plot_econ_results(capacities, yearly_annuity, npv_opex, npv_capex, npv, running_costs, maintenance_costs,
+                      electricity_costs, fuel_costs, folder_name, settings["cost_parameters"])
 
 def main():
 
